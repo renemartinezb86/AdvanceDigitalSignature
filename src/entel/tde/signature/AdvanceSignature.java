@@ -43,6 +43,18 @@ import java.util.Date;
 import java.util.Properties;
 
 import javax.xml.bind.DatatypeConverter;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 
 public class AdvanceSignature {
@@ -53,6 +65,7 @@ public class AdvanceSignature {
     private String tokenPass;
     private String inFilePath;
     private String outFilePath;
+    private String tempFilePath;
     private TElMessageSigner Signer;
     private TElPKCS11CertStorage Storage;
     private TElMemoryCertStorage CertStorage;
@@ -91,7 +104,8 @@ public class AdvanceSignature {
     }
 
     private void load() {
-        Storage.setDLLName(dllPath); // 32 bits
+        System.out.println("dllPAth: " + dllPath);
+        Storage.setDLLName(dllPath);
         Storage.open();
 
         int availableSlot = 0;
@@ -105,6 +119,21 @@ public class AdvanceSignature {
         Session = Storage.openSession(availableSlot, false);
         Session.login(SBPKCS11Base.utUser, tokenPass);
         Certificate = Storage.getCertificate(0);
+    }
+
+    protected boolean checkToken() {
+        boolean result = true;
+        try {
+            init();
+            load();
+            if (Certificate == null) {
+                result = false;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            result = false;
+        }
+        return result;
     }
 
     protected void Dsign() {
@@ -164,7 +193,7 @@ public class AdvanceSignature {
         Signer.setKeyData(X509KeyData);
         Signer.setReferences(Refs);
         //Begin XAdES
-/*
+        /*
         XAdESSigner = new TElXAdESSigner();
         Signer.setXAdESProcessor(XAdESSigner);
 
@@ -215,8 +244,35 @@ public class AdvanceSignature {
             obj.value = SigNode;
             Signer.save(obj);
 
-            F = new TElFileStream(outFilePath, "rw", true);
+            F = new TElFileStream(tempFilePath, "rw", true);
             FXMLDocument.saveToStream(F, SBXMLDefs.xcmNone, "");
+
+            File xmlFile = new File(tempFilePath);
+            DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+            dbFactory.setNamespaceAware(true);
+            DocumentBuilder dBuilder;
+            dBuilder = dbFactory.newDocumentBuilder();
+            Document doc = dBuilder.parse(xmlFile);
+            doc.getDocumentElement().normalize();
+
+            Node keyValue = doc.getElementsByTagNameNS("http://www.w3.org/2000/09/xmldsig#", "KeyValue").item(0);
+            Node x509IssuerSerial =
+                doc.getElementsByTagNameNS("http://www.w3.org/2000/09/xmldsig#", "X509IssuerSerial").item(0);
+            Node x509SubjectName =
+                doc.getElementsByTagNameNS("http://www.w3.org/2000/09/xmldsig#", "X509SubjectName").item(0);
+            keyValue.getParentNode().removeChild(keyValue);
+            x509IssuerSerial.getParentNode().removeChild(x509IssuerSerial);
+            x509SubjectName.getParentNode().removeChild(x509SubjectName);
+
+            TransformerFactory transformerFactory = TransformerFactory.newInstance();
+            Transformer transformer = transformerFactory.newTransformer();
+            transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+            transformer.setOutputProperty(OutputKeys.METHOD, "xml");
+            transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "4");
+            DOMSource source = new DOMSource(doc);
+            StreamResult streamResult = new StreamResult(new File(outFilePath));
+            transformer.transform(source, streamResult);
+
         } catch (Exception E) {
             E.printStackTrace();
             System.out.println("Signed data saving failed. " + E.getMessage());
@@ -277,6 +333,7 @@ public class AdvanceSignature {
                 prop.load(inputStream);
                 inFilePath = prop.getProperty("inFilePath");
                 outFilePath = prop.getProperty("outFilePath");
+                tempFilePath = prop.getProperty("tempFilePath");
                 dllPath = prop.getProperty("dllPath");
                 jniName = prop.getProperty("jniName");
                 tokenPass = prop.getProperty("tokenPass");
@@ -315,6 +372,15 @@ public class AdvanceSignature {
         } catch (Exception e) {
             e.printStackTrace();
         }
+        return output;
+    }
+
+    public JsonObject SiebelCheck(JsonObject input) {
+        JsonObject output = new JsonObject();
+        if (checkToken())
+            output.addProperty("status", "ok");
+        else
+            output.addProperty("status", "error");
         return output;
     }
 }
